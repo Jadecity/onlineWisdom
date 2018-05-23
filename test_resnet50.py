@@ -20,7 +20,7 @@ def eprint(*args, **kwargs):
 
 def load_conf():
     conf = {}
-    conf['input_size'] = 299
+    conf['input_size'] = 640
     conf['class_num'] = 1001
     conf['is_training'] = True
     conf['weight_decay'] = 0.0005
@@ -52,7 +52,7 @@ def main(_):
     img_input = tf.expand_dims(img_input, axis=0)
     with slim.arg_scope(resnet_v2.resnet_arg_scope(weight_decay=gconf['weight_decay'],
                                                    use_batch_norm=True)):
-        resnet, _ = resnet_v2.resnet_v2_50(inputs=img_input,
+        resnet, endpoints = resnet_v2.resnet_v2_50(inputs=img_input,
                                         num_classes=gconf['class_num'],
                                         is_training=gconf['is_training'])
 

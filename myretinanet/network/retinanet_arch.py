@@ -29,6 +29,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow.contrib import slim
 from preprocessing import inception_preprocessing as preprocess
+from nets import resnet_v2
 
 _WEIGHT_DECAY = 1e-4
 _BATCH_NORM_DECAY = 0.997
@@ -504,27 +505,52 @@ def box_net(images, level, num_anchors=6, is_training_bn=False):
 
 
 def resnet_fpn(features,
+               weight_decay,
+               class_num,
                min_level=3,
                max_level=7,
                resnet_depth=50,
-               is_training_bn=False):
+               is_training=False,
+               ckpt_file=None):
   """ResNet feature pyramid networks."""
   # upward layers
-  with tf.variable_scope('resnet%s' % resnet_depth):
+  # with tf.variable_scope('resnet%s' % resnet_depth):
     # resnet_fn = resnet_v1(resnet_depth)
     # u2, u3, u4, u5 = resnet_fn(features, is_training_bn)
 
-    with slim.arg_scope(resnet_v2.resnet_arg_scope(weight_decay=gconf['weight_decay'],
-                                                   use_batch_norm=True)):
-        resnet, _ = resnet_v2.resnet_v2_50(inputs=features,
-                                        num_classes=gconf['class_num'],
-                                        is_training=gconf['is_training'])
+  with slim.arg_scope(resnet_v2.resnet_arg_scope(weight_decay=weight_decay,
+                                                 use_batch_norm=True)):
+      resnet, endpoints = resnet_v2.resnet_v2_50(inputs=features,
+                                      num_classes=class_num,
+                                      is_training=is_training)
+
+      # Remove unneeded variables from graph.
+      # used_vars =  []
+      # used_vars_name = ['resnet_v2_50/conv1',
+      #                   'resnet_v2_50/pool1',
+      #                   'resnet_v2_50/block1',
+      #                   'resnet_v2_50/block2',
+      #                   'resnet_v2_50/block3',
+      #                   'resnet_v2_50/block4']
+      # for name in used_vars_name:
+      #   used_vars.append(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name))
+
+      if ckpt_file and is_training == True:
+        """Loads pretrained model through scaffold function."""
+        tf.train.init_from_checkpoint(ckpt_file, {
+          'resnet_v2_50/conv1/': 'resnet_v2_50/conv1/',
+          'resnet_v2_50/pool1/':'resnet_v2_50/pool1/',
+          'resnet_v2_50/block1/':'resnet_v2_50/block1/',
+          'resnet_v2_50/block2/':'resnet_v2_50/block2/',
+          'resnet_v2_50/block3/':'resnet_v2_50/block3/',
+          'resnet_v2_50/block4/':'resnet_v2_50/block4/'
+        })
 
   feats_bottom_up = {
-      2: u2,
-      3: u3,
-      4: u4,
-      5: u5,
+      2: endpoints['resnet_v2_50/block1'],
+      3: endpoints['resnet_v2_50/block2'],
+      4: endpoints['resnet_v2_50/block3'],
+      5: endpoints['resnet_v2_50/block4'],
   }
 
   with tf.variable_scope('resnet_fpn'):
@@ -541,9 +567,15 @@ def resnet_fpn(features,
     # add top-down path
     feats = {_RESNET_MAX_LEVEL: feats_lateral[_RESNET_MAX_LEVEL]}
     for level in range(_RESNET_MAX_LEVEL - 1, min_level - 1, -1):
-      feats[level] = (
-          nearest_upsampling(feats[level + 1], 2) + feats_lateral[level]
-      )
+      if level == _RESNET_MAX_LEVEL - 1:
+        # Last layer output is the same shape as prelayer, due to slim.resnet_v2.
+        feats[level] = (
+          feats[level + 1] + feats_lateral[level]
+        )
+      else:
+        feats[level] = (
+            nearest_upsampling(feats[level + 1], 2) + feats_lateral[level]
+        )
 
     # add post-hoc 3x3 convolution kernel
     for level, features in feats.items():
@@ -567,6 +599,7 @@ def resnet_fpn(features,
           kernel_size=(3, 3),
           padding='same',
           name='p%d' % level)
+
     # add batchnorm
     for level in range(min_level, max_level + 1):
       feats[level] = tf.layers.batch_normalization(
@@ -575,7 +608,7 @@ def resnet_fpn(features,
           epsilon=_BATCH_NORM_EPSILON,
           center=True,
           scale=True,
-          training=is_training_bn,
+          training=is_training,
           fused=True,
           name='p%d-bn' % level)
 
@@ -583,16 +616,18 @@ def resnet_fpn(features,
 
 
 def retinanet(features,
+              weight_decay,
+              ckpt_file=None,
               min_level=3,
               max_level=7,
               num_classes=90,
               num_anchors=6,
               resnet_depth=50,
-              is_training_bn=False):
+              is_training=False):
   """RetinaNet classification and regression model."""
   # create feature pyramid networks
-  feats = resnet_fpn(features, min_level, max_level, resnet_depth,
-                     is_training_bn)
+  feats = resnet_fpn(features, weight_decay, num_classes, min_level, max_level, resnet_depth,
+                     is_training, ckpt_file)
 
   # add class net and box net in RetinaNet. The class net and the box net are
   # shared among all the levels.
@@ -602,11 +637,11 @@ def retinanet(features,
     with tf.variable_scope('class_net', reuse=tf.AUTO_REUSE):
       for level in range(min_level, max_level + 1):
         class_outputs[level] = class_net(feats[level], level, num_classes,
-                                         num_anchors, is_training_bn)
+                                         num_anchors, is_training)
     with tf.variable_scope('box_net', reuse=tf.AUTO_REUSE):
       for level in range(min_level, max_level + 1):
         box_outputs[level] = box_net(feats[level], level,
-                                     num_anchors, is_training_bn)
+                                     num_anchors, is_training)
 
   return class_outputs, box_outputs
 

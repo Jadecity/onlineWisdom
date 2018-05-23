@@ -28,12 +28,12 @@ from __future__ import print_function
 
 import tensorflow as tf
 
-import anchors
-import coco_metric
-import retinanet_architecture
-from tensorflow.contrib.tpu.python.tpu import bfloat16
-from tensorflow.contrib.tpu.python.tpu import tpu_estimator
-from tensorflow.contrib.tpu.python.tpu import tpu_optimizer
+from retinanet import anchors
+from retinanet import coco_metric
+from retinanet import retinanet_architecture
+# from tensorflow.contrib.tpu.python.tpu import bfloat16
+# from tensorflow.contrib.tpu.python.tpu import tpu_estimator
+# from tensorflow.contrib.tpu.python.tpu import tpu_optimizer
 
 
 # A collection of Learning Rate schecules:
@@ -206,16 +206,16 @@ def _model_fn(features, labels, mode, params, model, variable_filter_fn=None):
         resnet_depth=params['resnet_depth'],
         is_training_bn=params['is_training_bn'])
 
-  if params['use_bfloat16']:
-    with bfloat16.bfloat16_scope():
-      cls_outputs, box_outputs = _model_outputs()
-      levels = cls_outputs.keys()
-      for level in levels:
-        cls_outputs[level] = tf.cast(cls_outputs[level], tf.float32)
-        box_outputs[level] = tf.cast(box_outputs[level], tf.float32)
-  else:
-    cls_outputs, box_outputs = _model_outputs()
-    levels = cls_outputs.keys()
+  # if params['use_bfloat16']:
+  #   with bfloat16.bfloat16_scope():
+  #     cls_outputs, box_outputs = _model_outputs()
+  #     levels = cls_outputs.keys()
+  #     for level in levels:
+  #       cls_outputs[level] = tf.cast(cls_outputs[level], tf.float32)
+  #       box_outputs[level] = tf.cast(box_outputs[level], tf.float32)
+  # else:
+  cls_outputs, box_outputs = _model_outputs()
+  levels = cls_outputs.keys()
 
   # First check if it is in PREDICT mode.
   if mode == tf.estimator.ModeKeys.PREDICT:
@@ -235,9 +235,10 @@ def _model_fn(features, labels, mode, params, model, variable_filter_fn=None):
       tf.train.init_from_checkpoint(params['resnet_checkpoint'], {
           '/': 'resnet%s/' % params['resnet_depth'],
       })
-      return tf.train.Scaffold()
+
+    scaffold = tf.train.Scaffold(init_fn=scaffold_fn)
   else:
-    scaffold_fn = None
+    scaffold = None
 
   # Set up training loss and learning rate.
   global_step = tf.train.get_global_step()
@@ -252,8 +253,8 @@ def _model_fn(features, labels, mode, params, model, variable_filter_fn=None):
   if mode == tf.estimator.ModeKeys.TRAIN:
     optimizer = tf.train.MomentumOptimizer(
         learning_rate, momentum=params['momentum'])
-    if params['use_tpu']:
-      optimizer = tpu_optimizer.CrossShardOptimizer(optimizer)
+    # if params['use_tpu']:
+    #   optimizer = tpu_optimizer.CrossShardOptimizer(optimizer)
 
     # Batch norm requires update_ops to be added as a train_op dependency.
     update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
@@ -320,12 +321,12 @@ def _model_fn(features, labels, mode, params, model, variable_filter_fn=None):
       metric_fn_inputs['box_outputs_%d' % level] = box_outputs[level]
     eval_metrics = (metric_fn, metric_fn_inputs)
 
-  return tpu_estimator.TPUEstimatorSpec(
+  return tf.estimator.EstimatorSpec(
       mode=mode,
       loss=total_loss,
       train_op=train_op,
-      eval_metrics=eval_metrics,
-      scaffold_fn=scaffold_fn)
+      evaluation_hooks=eval_metrics,
+      scaffold=scaffold)
 
 
 def retinanet_model_fn(features, labels, mode, params):
