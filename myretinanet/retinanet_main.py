@@ -22,6 +22,7 @@ from myretinanet import retinanet_model
 from myretinanet.dataset.cocodataset import CoCoDataset
 from myretinanet.network.retinanet_arch import retinanet
 from myretinanet.utils import anchors, coco_metric
+from collections import namedtuple
 
 help_dict={
   'resnet_checkpoint'    : 'Location of the ResNet50 checkpoint to use for model initialization.',
@@ -48,6 +49,52 @@ help_dict={
 
 def arg_def(name, default_val):
   return name, default_val, help_dict[name]
+
+Param = namedtuple('ParamStruct', [
+  'resnet_checkpoint',
+  'retinanet_checkpoint',
+  'training_file_pattern',
+  'hparams',
+  'train_batch_size',
+  'iterations_per_loop',
+  'num_epochs',
+  'examples_per_epoch',
+  'eval_after_training',
+  'eval_log_dir',
+  'eval_num',
+  'eval_steps',
+  'eval_file_pattern',
+  'eval_json_file',
+  'eval_batch_size',
+  'mode',
+  'model_dir',
+  'use_xla',
+
+  'image_size',
+  'input_rand_hflip',
+  'num_classes',
+  'skip_crowd',
+  'min_level',
+  'max_level',
+  'num_scales',
+  'aspect_ratios',
+  'anchor_scale',
+  'resnet_depth',
+  'is_training_bn',
+  'momentum',
+  'learning_rate',
+  'weight_decay',
+  'lr_warmup_init',
+  'lr_warmup_step',
+  'lr_drop_step',
+  'alpha',
+  'gamma',
+  'delta',
+  'box_loss_weight',
+  'resnet_checkpoint',
+  'box_max_detected',
+  'box_iou_threshold'
+])
 
 def inputParam():
 
@@ -87,18 +134,82 @@ def checkInputParam(FLAGS):
     if FLAGS.val_json_file is None:
       raise RuntimeError('You must specify --val_json_file for evaluation.')
 
+def init_param(input_flag):
+  params = Param(
+    # For train
+    resnet_checkpoint=input_flag.resnet_checkpoint,
+    retinanet_checkpoint=input_flag.retinanet_checkpoint,
+    training_file_pattern=input_flag.training_file_pattern,
+    hparams=input_flag.hparams,
+    train_batch_size=input_flag.train_batch_size,
+    iterations_per_loop=input_flag.iterations_per_loop,
+    num_epochs=input_flag.num_epochs,
+    examples_per_epoch=input_flag.examples_per_epoch,
+
+    # For eval
+    eval_after_training=input_flag.eval_after_training,
+    eval_log_dir=input_flag.eval_log_dir,
+    eval_num=input_flag.eval_num,
+    eval_steps=input_flag.eval_steps,
+    eval_file_pattern=input_flag.eval_file_pattern,
+    eval_json_file=input_flag.eval_json_file,
+    eval_batch_size=input_flag.eval_batch_size,
+
+    # Shared  settings
+    mode=input_flag.mode,
+    model_dir=input_flag.model_dir,
+    use_xla=input_flag.use_xla,
+
+    image_size=640,
+    input_rand_hflip=True,
+
+    # dataset specific parameters
+    num_classes=90,
+    skip_crowd=True,
+
+    # model architecture
+    min_level=3,
+    max_level=7,
+    num_scales=3,
+    aspect_ratios=[(1.0, 1.0), (1.4, 0.7), (0.7, 1.4)],
+    anchor_scale=4.0,
+    resnet_depth=50,
+
+    # is batchnorm training mode
+    is_training_bn=True,
+
+    # optimization
+    momentum=0.9,
+    learning_rate=0.08,
+    weight_decay=1e-4,
+    lr_warmup_init=0.1,
+    lr_warmup_step=2000,
+    lr_drop_step=15000,
+
+    # classification loss
+    alpha=0.25,
+    gamma=1.5,
+
+    # localization loss
+    delta=0.1,
+    box_loss_weight=50.0,
+
+    # output detection
+    box_max_detected=100,
+    box_iou_threshold=0.5,
+    use_bfloat16=False
+  )
+
+  return params
+
 FLAGS = inputParam()
+
 
 def main(_):
 
   checkInputParam(FLAGS)
 
-  # Parse hparams
-  hparams = retinanet_model.default_hparams()
-  hparams.parse(FLAGS.hparams)
-  FLAGS.hparams = hparams
-
-  params = FLAGS
+  params = init_param(FLAGS)
 
   # Config session.
   # config_proto = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
@@ -148,7 +259,7 @@ def main(_):
                                              global_step=global_step,
                                              variables_to_train=vars_train)
     # Learn using GPU
-    max_steps = int((params.num_epochs * params.num_examples_per_epoch) / params.train_batch_size)
+    max_steps = int((params.num_epochs * params.examples_per_epoch) / params.train_batch_size)
     slim.learning.train(train_op=train_op,
                         logdir=params.model_dir,
                         log_every_n_steps=params.iterations_per_loop,
