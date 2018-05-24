@@ -26,11 +26,11 @@ from collections import namedtuple
 
 help_dict={
   'resnet_checkpoint'    : 'Location of the ResNet50 checkpoint to use for model initialization.',
-  'retinanet_checkpoint' : 'Location of the ResNet50 checkpoint to use for model initialization.',
+  'retinanet_checkpoint' : 'Location of the retinanet checkpoint to use for model initialization.',
   'training_file_pattern': 'Glob for training data files (e.g., COCO train - minival set)',
   'hparams'              : 'Comma separated k=v pairs of hyperparameters.',
   'train_batch_size'     : 'training batch size',
-  'iterations_per_loop'  : 'Number of iterations per TPU training loop',
+  'log_step'  : 'Number of iterations per TPU training loop',
   'num_epochs'           : 'Number of epochs for training',
   'examples_per_epoch'   : 'Number of examples in one epoch',
 
@@ -47,8 +47,10 @@ help_dict={
   'use_xla'              : 'Use XLA even if use_tpu is false.  If use_tpu is true, we always use XLA, and this flag has no effect.'
 }
 
+
 def arg_def(name, default_val):
   return name, default_val, help_dict[name]
+
 
 Param = namedtuple('ParamStruct', [
   'resnet_checkpoint',
@@ -56,13 +58,12 @@ Param = namedtuple('ParamStruct', [
   'training_file_pattern',
   'hparams',
   'train_batch_size',
-  'iterations_per_loop',
+  'log_step',
   'num_epochs',
   'examples_per_epoch',
   'eval_after_training',
   'eval_log_dir',
   'eval_num',
-  'eval_steps',
   'eval_file_pattern',
   'eval_json_file',
   'eval_batch_size',
@@ -91,10 +92,10 @@ Param = namedtuple('ParamStruct', [
   'gamma',
   'delta',
   'box_loss_weight',
-  'resnet_checkpoint',
   'box_max_detected',
   'box_iou_threshold'
 ])
+
 
 def inputParam():
 
@@ -103,10 +104,10 @@ def inputParam():
   flags.DEFINE_string(*arg_def('retinanet_checkpoint', ''))
   flags.DEFINE_string(*arg_def('training_file_pattern', None))
   flags.DEFINE_string(*arg_def('hparams', ''))
-  flags.DEFINE_integer(*arg_def('train_batch_size', 32))
-  flags.DEFINE_integer(*arg_def('iterations_per_loop', 100))
+  flags.DEFINE_integer(*arg_def('train_batch_size', 1))
+  flags.DEFINE_integer(*arg_def('log_step', 1))
   flags.DEFINE_integer(*arg_def('num_epochs', 15))
-  flags.DEFINE_integer(*arg_def('num_examples_per_epoch', 120000))
+  flags.DEFINE_integer(*arg_def('examples_per_epoch', 120000))
 
   # For Eval mode
   flags.DEFINE_bool(*arg_def('eval_after_training', False))
@@ -123,6 +124,7 @@ def inputParam():
 
   return flags.FLAGS
 
+
 def checkInputParam(FLAGS):
   if FLAGS.mode is 'train' and FLAGS.training_file_pattern is None:
     raise RuntimeError('You must specify --training_file_pattern for training.')
@@ -131,18 +133,20 @@ def checkInputParam(FLAGS):
     if FLAGS.valid_data_dir is None:
       raise RuntimeError('You must specify --valid_data_dir for evaluation.')
 
-    if FLAGS.val_json_file is None:
-      raise RuntimeError('You must specify --val_json_file for evaluation.')
+    if FLAGS.eval_json_file is None:
+      raise RuntimeError('You must specify --eval_json_file for evaluation.')
 
-def init_param(input_flag):
+
+def initParam(input_flag):
   params = Param(
     # For train
     resnet_checkpoint=input_flag.resnet_checkpoint,
     retinanet_checkpoint=input_flag.retinanet_checkpoint,
+
     training_file_pattern=input_flag.training_file_pattern,
     hparams=input_flag.hparams,
     train_batch_size=input_flag.train_batch_size,
-    iterations_per_loop=input_flag.iterations_per_loop,
+    log_step=input_flag.log_step,
     num_epochs=input_flag.num_epochs,
     examples_per_epoch=input_flag.examples_per_epoch,
 
@@ -150,7 +154,6 @@ def init_param(input_flag):
     eval_after_training=input_flag.eval_after_training,
     eval_log_dir=input_flag.eval_log_dir,
     eval_num=input_flag.eval_num,
-    eval_steps=input_flag.eval_steps,
     eval_file_pattern=input_flag.eval_file_pattern,
     eval_json_file=input_flag.eval_json_file,
     eval_batch_size=input_flag.eval_batch_size,
@@ -196,11 +199,44 @@ def init_param(input_flag):
 
     # output detection
     box_max_detected=100,
-    box_iou_threshold=0.5,
-    use_bfloat16=False
+    box_iou_threshold=0.5
   )
 
   return params
+
+
+def metric_fn(mt_input, params):
+  """Evaluation metric fn. Performed on CPU, do not reference TPU ops."""
+  eval_anchors = anchors.Anchors(params.min_level,
+                                 params.max_level,
+                                 params.num_scales,
+                                 params.aspect_ratios,
+                                 params.anchor_scale,
+                                 params.image_size)
+  anchor_labeler = anchors.AnchorLabeler(eval_anchors,
+                                         params.num_classes)
+  cls_loss = tf.metrics.mean(mt_input['cls_loss_repeat'])
+  box_loss = tf.metrics.mean(mt_input['box_loss_repeat'])
+
+  # add metrics to output
+  cls_outputs = {}
+  box_outputs = {}
+  for level in range(params.min_level, params.max_level + 1):
+    cls_outputs[level] = mt_input['cls_outputs_%d' % level]
+    box_outputs[level] = mt_input['box_outputs_%d' % level]
+
+  detections = anchor_labeler.generate_detections(
+    cls_outputs, box_outputs, mt_input['source_ids'])
+  eval_metric = coco_metric.EvaluationMetric(params.eval_json_file)
+  values, updates = eval_metric.estimator_metric_fn(detections,
+                                                 mt_input['image_scales'])
+  # Add metrics to output.
+  output_values = {
+    'cls_loss': cls_loss,
+    'box_loss': box_loss,
+  }
+  output_values.update(values)
+  return output_values, updates
 
 FLAGS = inputParam()
 
@@ -209,7 +245,7 @@ def main(_):
 
   checkInputParam(FLAGS)
 
-  params = init_param(FLAGS)
+  params = initParam(FLAGS)
 
   # Config session.
   # config_proto = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
@@ -262,9 +298,9 @@ def main(_):
     max_steps = int((params.num_epochs * params.examples_per_epoch) / params.train_batch_size)
     slim.learning.train(train_op=train_op,
                         logdir=params.model_dir,
-                        log_every_n_steps=params.iterations_per_loop,
+                        log_every_n_steps=params.log_step,
                         global_step=global_step,
-                        number_of_steps=max_steps,
+                        number_of_steps=1,
                         init_feed_dict={lr: params.learning_rate},
                         save_interval_secs=1000 * 50,  # 1000 step save once
                         save_summaries_secs=10 * 50    # ten step
@@ -273,7 +309,7 @@ def main(_):
   elif params.mode == 'eval':
     # eval only runs on CPU or GPU host with batch_size = 1
     # Prepare input data
-    coco_train = CoCoDataset(record_path=params.validation_file_pattern,
+    coco_train = CoCoDataset(record_path=params.eval_file_pattern,
                              is_training=is_training,
                              batch_size=1,
                              params=params)
@@ -292,46 +328,14 @@ def main(_):
     total_loss, cls_loss, box_loss = retinanet_model.detection_loss(logits, pboxes,
                                                                     glabels, params)
 
-    def metric_fn(**kwargs):
-      """Evaluation metric fn. Performed on CPU, do not reference TPU ops."""
-      eval_anchors = anchors.Anchors(params.min_level,
-                                     params.max_level,
-                                     params.num_scales,
-                                     params.aspect_ratios,
-                                     params.anchor_scale,
-                                     params.image_size)
-      anchor_labeler = anchors.AnchorLabeler(eval_anchors,
-                                             params.num_classes)
-      cls_loss = tf.metrics.mean(kwargs['cls_loss_repeat'])
-      box_loss = tf.metrics.mean(kwargs['box_loss_repeat'])
-      # add metrics to output
-      cls_outputs = {}
-      box_outputs = {}
-      for level in range(params.min_level, params.max_level + 1):
-        cls_outputs[level] = kwargs['cls_outputs_%d' % level]
-        box_outputs[level] = kwargs['box_outputs_%d' % level]
-      detections = anchor_labeler.generate_detections(
-          cls_outputs, box_outputs, kwargs['source_ids'])
-      eval_metric = coco_metric.EvaluationMetric(params.val_json_file)
-      coco_metrics = eval_metric.estimator_metric_fn(detections,
-                                                     kwargs['image_scales'])
-      # Add metrics to output.
-      output_metrics = {
-          'cls_loss': cls_loss,
-          'box_loss': box_loss,
-      }
-      output_metrics.update(coco_metrics)
-      return output_metrics
-
-    batch_size = 1
     cls_loss_repeat = tf.reshape(
         tf.tile(tf.expand_dims(cls_loss, 0), [
-            batch_size,
-        ]), [batch_size, 1])
+            params.eval_batch_size,
+        ]), [params.eval_batch_size, 1])
     box_loss_repeat = tf.reshape(
         tf.tile(tf.expand_dims(box_loss, 0), [
-            batch_size,
-        ]), [batch_size, 1])
+            params.eval_batch_size,
+        ]), [params.eval_batch_size, 1])
 
     metric_fn_inputs = {
         'cls_loss_repeat': cls_loss_repeat,
@@ -343,13 +347,14 @@ def main(_):
       metric_fn_inputs['cls_outputs_%d' % level] = logits[level]
       metric_fn_inputs['box_outputs_%d' % level] = pboxes[level]
 
-    out_metric = metric_fn(metric_fn_inputs)
+    value_ops,  update_ops= metric_fn(metric_fn_inputs, params)
 
-    slim.evaluation.evaluate_once('local',
+    slim.evaluation.evaluate_once('',
                                   params.retinanet_checkpoint,
                                   logdir=params.eval_log_dir,
                                   num_evals=params.eval_num,
-                                  eval_op=out_metric)
+                                  eval_op=update_ops,
+                                  final_op=value_ops)
 
   else:
     tf.logging.info('Mode not found.')

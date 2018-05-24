@@ -112,6 +112,9 @@ class EvaluationMetric(object):
       update_op = tf.py_func(_update_op, [detections, image_scale], [])
       metrics = tf.py_func(_evaluate, [], tf.float32)
       metrics_dict = {}
+      updates_list = []
       for i, name in enumerate(self.metric_names):
-        metrics_dict[name] = (metrics[i], update_op)
-      return metrics_dict
+        metrics_dict[name] = metrics[i]
+        updates_list.append(update_op)
+
+      return metrics_dict, updates_list
