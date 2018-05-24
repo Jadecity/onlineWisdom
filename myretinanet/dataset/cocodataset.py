@@ -22,12 +22,12 @@ class CoCoDataset():
     self._skip_crowd = skip_crowd
     self._batch_size = batch_size
     self._params = params
-    input_anchors = anchors.Anchors(params['min_level'], params['max_level'],
-                                    params['num_scales'],
-                                    params['aspect_ratios'],
-                                    params['anchor_scale'],
-                                    params['image_size'])
-    self._anchor_labeler = anchors.AnchorLabeler(input_anchors, params['num_classes'])
+    input_anchors = anchors.Anchors(params.min_level, params.max_level,
+                                    params.num_scales,
+                                    params.aspect_ratios,
+                                    params.anchor_scale,
+                                    params.image_size)
+    self._anchor_labeler = anchors.AnchorLabeler(input_anchors, params.num_classes)
 
     self._dataset = self._build_dataset(record_path, is_training, batch_size)
     self._itr = self._dataset.make_one_shot_iterator()
@@ -73,8 +73,8 @@ class CoCoDataset():
     # Preprocessing
     image_original_shape = tf.shape(image)
     image, boxes = self._preprocess(image, boxes,
-                                    self._params['image_size'],
-                                    self._params['input_rand_hflip'])
+                                    self._params.image_size,
+                                    self._params.input_rand_hflip)
 
     # Compute output
     image_scale = tf.to_float(image_original_shape[0]) / tf.to_float(tf.shape(image)[0])

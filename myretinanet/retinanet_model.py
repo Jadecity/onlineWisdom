@@ -186,7 +186,7 @@ def detection_loss(cls_outputs, box_outputs, labels, params):
     # Onehot encoding for classification labels.
     cls_targets_at_level = tf.one_hot(
         labels['cls_targets_%d' % level],
-        params['num_classes'])
+        params.num_classes)
     bs, width, height, _, _ = cls_targets_at_level.get_shape().as_list()
     cls_targets_at_level = tf.reshape(cls_targets_at_level,
                                       [bs, width, height, -1])
@@ -196,17 +196,17 @@ def detection_loss(cls_outputs, box_outputs, labels, params):
             cls_outputs[level],
             cls_targets_at_level,
             num_positives_sum,
-            alpha=params['alpha'],
-            gamma=params['gamma']))
+            alpha=params.alpha,
+            gamma=params.gamma))
     box_losses.append(
         _box_loss(
             box_outputs[level],
             box_targets_at_level,
             num_positives_sum,
-            delta=params['delta']))
+            delta=params.delta))
 
   # Sum per level losses to total loss.
   cls_loss = tf.add_n(cls_losses)
   box_loss = tf.add_n(box_losses)
-  total_loss = cls_loss + params['box_loss_weight'] * box_loss
+  total_loss = cls_loss + params.box_loss_weight * box_loss
   return total_loss, cls_loss, box_loss

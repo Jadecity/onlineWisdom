@@ -28,7 +28,6 @@ from __future__ import print_function
 import numpy as np
 import tensorflow as tf
 from tensorflow.contrib import slim
-from preprocessing import inception_preprocessing as preprocess
 from nets import resnet_v2
 
 _WEIGHT_DECAY = 1e-4

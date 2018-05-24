@@ -15,72 +15,64 @@
 """Training script for RetinaNet.
 """
 
-import os
-
 import tensorflow as tf
-from collections import namedtuple
 from absl import flags
 from tensorflow.contrib import slim
 from myretinanet import retinanet_model
 from myretinanet.dataset.cocodataset import CoCoDataset
 from myretinanet.network.retinanet_arch import retinanet
-from myretinanet.unit_test import testers
+from myretinanet.utils import anchors, coco_metric
+
+help_dict={
+  'resnet_checkpoint'    : 'Location of the ResNet50 checkpoint to use for model initialization.',
+  'retinanet_checkpoint' : 'Location of the ResNet50 checkpoint to use for model initialization.',
+  'training_file_pattern': 'Glob for training data files (e.g., COCO train - minival set)',
+  'hparams'              : 'Comma separated k=v pairs of hyperparameters.',
+  'train_batch_size'     : 'training batch size',
+  'iterations_per_loop'  : 'Number of iterations per TPU training loop',
+  'num_epochs'           : 'Number of epochs for training',
+  'examples_per_epoch'   : 'Number of examples in one epoch',
+
+  'eval_after_training'  : 'Run one eval after the training finishes.',
+  'eval_log_dir'         : 'Location of log_dir in evaluation',
+  'eval_num'             : 'Maximum evaluation number.',
+  'eval_steps'           : 'evaluation steps',
+  'eval_file_pattern'    : 'Glob for evaluation tfrecords (e.g., COCO val2017 set)',
+  'eval_json_file'       : 'COCO validation JSON containing golden bounding boxes.',
+  'eval_batch_size'      : 'batch size used in evaluation mode.',
+
+  'mode'                 : 'Mode to run: train or eval (default: train)',
+  'model_dir'            : 'Location of model_dir',
+  'use_xla'              : 'Use XLA even if use_tpu is false.  If use_tpu is true, we always use XLA, and this flag has no effect.'
+}
+
+def arg_def(name, default_val):
+  return name, default_val, help_dict[name]
 
 def inputParam():
 
-  flags.DEFINE_bool(
-      'use_xla',
-      False,
-      """Use XLA even if use_tpu is false.  If use_tpu is true, we always use XLA, and this flag has no effect.""")
-  flags.DEFINE_string('model_dir',
-                      None,
-                      'Location of model_dir')
-
-  flags.DEFINE_string('resnet_checkpoint',
-                      '',
-                      'Location of the ResNet50 checkpoint to use for model initialization.')
-  flags.DEFINE_string('hparams',
-                      '',
-                      'Comma separated k=v pairs of hyperparameters.')
-  flags.DEFINE_integer('train_batch_size',
-                       64,
-                       'training batch size')
-  flags.DEFINE_integer('eval_steps',
-                       5000,
-                       'evaluation steps')
-  flags.DEFINE_integer('iterations_per_loop',
-                       100,
-                       'Number of iterations per TPU training loop')
-  flags.DEFINE_string('training_file_pattern',
-                      None,
-                      'Glob for training data files (e.g., COCO train - minival set)')
-  flags.DEFINE_string('validation_file_pattern',
-                      None,
-                      'Glob for evaluation tfrecords (e.g., COCO val2017 set)')
-  flags.DEFINE_string('val_json_file',
-                      '',
-                      'COCO validation JSON containing golden bounding boxes.')
-  flags.DEFINE_integer('num_examples_per_epoch',
-                       120000,
-                       'Number of examples in one epoch')
-  flags.DEFINE_integer('num_epochs',
-                       15,
-                       'Number of epochs for training')
-  flags.DEFINE_string('mode',
-                      'train',
-                      'Mode to run: train or eval (default: train)')
-  flags.DEFINE_bool('eval_after_training',
-                    False,
-                    'Run one eval after the '
-                    'training finishes.')
+  # For train
+  flags.DEFINE_string(*arg_def('resnet_checkpoint', ''))
+  flags.DEFINE_string(*arg_def('retinanet_checkpoint', ''))
+  flags.DEFINE_string(*arg_def('training_file_pattern', None))
+  flags.DEFINE_string(*arg_def('hparams', ''))
+  flags.DEFINE_integer(*arg_def('train_batch_size', 32))
+  flags.DEFINE_integer(*arg_def('iterations_per_loop', 100))
+  flags.DEFINE_integer(*arg_def('num_epochs', 15))
+  flags.DEFINE_integer(*arg_def('num_examples_per_epoch', 120000))
 
   # For Eval mode
-  flags.DEFINE_integer('min_eval_interval',
-                       180,
-                       'Minimum seconds between evaluations.')
-  flags.DEFINE_integer('eval_timeout',
-                       None,
-                       'Maximum seconds between checkpoints before evaluation terminates.')
+  flags.DEFINE_bool(*arg_def('eval_after_training', False))
+  flags.DEFINE_string(*arg_def('eval_log_dir', None))
+  flags.DEFINE_integer(*arg_def('eval_num', None))
+  flags.DEFINE_integer(*arg_def('eval_batch_size', 1))
+  flags.DEFINE_string(*arg_def('eval_file_pattern', None))
+  flags.DEFINE_string(*arg_def('eval_json_file',''))
+
+  # For both
+  flags.DEFINE_string(*arg_def('mode','train'))
+  flags.DEFINE_string(*arg_def('model_dir', None))
+  flags.DEFINE_bool(*arg_def('use_xla', False))
 
   return flags.FLAGS
 
@@ -104,35 +96,31 @@ def main(_):
   # Parse hparams
   hparams = retinanet_model.default_hparams()
   hparams.parse(FLAGS.hparams)
+  FLAGS.hparams = hparams
 
-  params = dict(
-      hparams.values(),
-      resnet_checkpoint=FLAGS.resnet_checkpoint,
-      val_json_file=FLAGS.val_json_file,
-      mode=FLAGS.mode,
-  )
+  params = FLAGS
 
   # Config session.
   # config_proto = tf.ConfigProto(allow_soft_placement=True, log_device_placement=False)
-  if params['mode'] == 'train':
+  if params.mode == 'train':
     is_training = True
   else:
     is_training = False
 
-  if FLAGS.mode == 'train':
+  if params.mode == 'train':
     # Prepare input data
-    coco_train = CoCoDataset(record_path=FLAGS.training_file_pattern,
+    coco_train = CoCoDataset(record_path=params.training_file_pattern,
                              is_training=is_training,
-                             batch_size=FLAGS.train_batch_size,
+                             batch_size=params.train_batch_size,
                              params=params)
     imgs, glabels = coco_train.get_next()
 
     # Create network
-    logits, pboxes = retinanet(imgs, params['weight_decay'],
-                               ckpt_file=params['resnet_checkpoint'],
-                               num_classes=params['num_classes'],
+    logits, pboxes = retinanet(imgs, params.weight_decay,
+                               ckpt_file=params.resnet_checkpoint,
+                               num_classes=params.num_classes,
                                is_training=is_training,
-                               num_anchors=len(params['aspect_ratios']) * params['num_scales'])
+                               num_anchors=len(params.aspect_ratios) * params.num_scales)
 
     # Compute loss
     # cls_loss and box_loss are for logging. only total_loss is optimized.
@@ -146,9 +134,9 @@ def main(_):
     # Create optimizer
     tf.train.create_global_step()
     global_step = tf.train.get_global_step()
-    lr = retinanet_model.learning_rate_schedule(params['learning_rate'], params['lr_warmup_init'],
-      params['lr_warmup_step'], params['lr_drop_step'], global_step)
-    optimizer = tf.train.MomentumOptimizer(lr, params['momentum'])
+    lr = retinanet_model.learning_rate_schedule(params.learning_rate, params.lr_warmup_init,
+      params.lr_warmup_step, params.lr_drop_step, global_step)
+    optimizer = tf.train.MomentumOptimizer(lr, params.momentum)
 
     # Select trainable variables.
     vars_train = tf.trainable_variables(scope='retinanet')
@@ -160,69 +148,98 @@ def main(_):
                                              global_step=global_step,
                                              variables_to_train=vars_train)
     # Learn using GPU
-    max_step = FLAGS.num_epochs * FLAGS.num_examples_per_epoch
+    max_steps = int((params.num_epochs * params.num_examples_per_epoch) / params.train_batch_size)
     slim.learning.train(train_op=train_op,
-                        logdir=FLAGS.model_dir,
-                        log_every_n_steps=FLAGS.iterations_per_loop,
+                        logdir=params.model_dir,
+                        log_every_n_steps=params.iterations_per_loop,
                         global_step=global_step,
-                        number_of_steps=1,
-                        init_feed_dict={lr: params['learning_rate']})
-
-  elif FLAGS.mode == 'eval':
-    # eval only runs on CPU or GPU host with batch_size = 1
-
-    # Override the default options: disable randomization in the input pipeline
-    # and don't run on the TPU.
-    eval_params = dict(
-        params,
-        input_rand_hflip=False,
-        skip_crowd=False,
-        resnet_checkpoint=None,
-        is_training_bn=False,
+                        number_of_steps=max_steps,
+                        init_feed_dict={lr: params.learning_rate},
+                        save_interval_secs=1000 * 50,  # 1000 step save once
+                        save_summaries_secs=10 * 50    # ten step
     )
 
-    eval_estimator = estimator.Estimator(
-        model_fn=retinanet_model.retinanet_model_fn,
-        config=run_conf,
-        params=eval_params)
+  elif params.mode == 'eval':
+    # eval only runs on CPU or GPU host with batch_size = 1
+    # Prepare input data
+    coco_train = CoCoDataset(record_path=params.validation_file_pattern,
+                             is_training=is_training,
+                             batch_size=1,
+                             params=params)
+    imgs, glabels = coco_train.get_next()
 
-    def terminate_eval():
-      tf.logging.info('Terminating eval after %d seconds of no checkpoints' %
-                      FLAGS.eval_timeout)
-      return True
+    # Create network
+    logits, pboxes = retinanet(imgs, params.weight_decay,
+                               ckpt_file=params.resnet_checkpoint,
+                               num_classes=params.num_classes,
+                               is_training=is_training,
+                               num_anchors=len(params.aspect_ratios) * params.num_scales)
 
-    # Run evaluation when there's a new checkpoint
-    for ckpt in evaluation.checkpoints_iterator(
-        FLAGS.model_dir,
-        min_interval_secs=FLAGS.min_eval_interval,
-        timeout=FLAGS.eval_timeout,
-        timeout_fn=terminate_eval):
 
-      tf.logging.info('Starting to evaluate.')
-      try:
-        eval_results = eval_estimator.evaluate(
-            input_fn=dataloader.InputReader(FLAGS.validation_file_pattern,
-                                            is_training=False),
-            steps=FLAGS.eval_steps)
-        tf.logging.info('Eval results: %s' % eval_results)
+    # Compute loss
+    # cls_loss and box_loss are for logging. only total_loss is optimized.
+    total_loss, cls_loss, box_loss = retinanet_model.detection_loss(logits, pboxes,
+                                                                    glabels, params)
 
-        # Terminate eval job when final checkpoint is reached
-        current_step = int(os.path.basename(ckpt).split('-')[1])
-        total_step = int((FLAGS.num_epochs * FLAGS.num_examples_per_epoch) /
-                         FLAGS.train_batch_size)
+    def metric_fn(**kwargs):
+      """Evaluation metric fn. Performed on CPU, do not reference TPU ops."""
+      eval_anchors = anchors.Anchors(params.min_level,
+                                     params.max_level,
+                                     params.num_scales,
+                                     params.aspect_ratios,
+                                     params.anchor_scale,
+                                     params.image_size)
+      anchor_labeler = anchors.AnchorLabeler(eval_anchors,
+                                             params.num_classes)
+      cls_loss = tf.metrics.mean(kwargs['cls_loss_repeat'])
+      box_loss = tf.metrics.mean(kwargs['box_loss_repeat'])
+      # add metrics to output
+      cls_outputs = {}
+      box_outputs = {}
+      for level in range(params.min_level, params.max_level + 1):
+        cls_outputs[level] = kwargs['cls_outputs_%d' % level]
+        box_outputs[level] = kwargs['box_outputs_%d' % level]
+      detections = anchor_labeler.generate_detections(
+          cls_outputs, box_outputs, kwargs['source_ids'])
+      eval_metric = coco_metric.EvaluationMetric(params.val_json_file)
+      coco_metrics = eval_metric.estimator_metric_fn(detections,
+                                                     kwargs['image_scales'])
+      # Add metrics to output.
+      output_metrics = {
+          'cls_loss': cls_loss,
+          'box_loss': box_loss,
+      }
+      output_metrics.update(coco_metrics)
+      return output_metrics
 
-        if current_step >= total_step:
-          tf.logging.info('Evaluation finished after training step %d' %
-                          current_step)
-          break
+    batch_size = 1
+    cls_loss_repeat = tf.reshape(
+        tf.tile(tf.expand_dims(cls_loss, 0), [
+            batch_size,
+        ]), [batch_size, 1])
+    box_loss_repeat = tf.reshape(
+        tf.tile(tf.expand_dims(box_loss, 0), [
+            batch_size,
+        ]), [batch_size, 1])
 
-      except tf.errors.NotFoundError:
-        # Since the coordinator is on a different job than the TPU worker,
-        # sometimes the TPU worker does not finish initializing until long after
-        # the CPU job tells it to start evaluating. In this case, the checkpoint
-        # file could have been deleted already.
-        tf.logging.info('Checkpoint %s no longer exists, skipping checkpoint' %
-                        ckpt)
+    metric_fn_inputs = {
+        'cls_loss_repeat': cls_loss_repeat,
+        'box_loss_repeat': box_loss_repeat,
+        'source_ids': glabels['source_ids'],
+        'image_scales': glabels['image_scales'],
+    }
+    for level in range(params.min_level, params.max_level + 1):
+      metric_fn_inputs['cls_outputs_%d' % level] = logits[level]
+      metric_fn_inputs['box_outputs_%d' % level] = pboxes[level]
+
+    out_metric = metric_fn(metric_fn_inputs)
+
+    slim.evaluation.evaluate_once('local',
+                                  params.retinanet_checkpoint,
+                                  logdir=params.eval_log_dir,
+                                  num_evals=params.eval_num,
+                                  eval_op=out_metric)
+
   else:
     tf.logging.info('Mode not found.')
 

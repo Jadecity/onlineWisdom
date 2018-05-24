@@ -290,6 +290,7 @@ def _model_fn(features, labels, mode, params, model, variable_filter_fn=None):
         box_outputs[level] = kwargs['box_outputs_%d' % level]
       detections = anchor_labeler.generate_detections(
           cls_outputs, box_outputs, kwargs['source_ids'])
+
       eval_metric = coco_metric.EvaluationMetric(params['val_json_file'])
       coco_metrics = eval_metric.estimator_metric_fn(detections,
                                                      kwargs['image_scales'])
