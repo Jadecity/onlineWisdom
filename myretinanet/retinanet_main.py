@@ -104,8 +104,8 @@ def inputParam():
   flags.DEFINE_string(*arg_def('retinanet_checkpoint', ''))
   flags.DEFINE_string(*arg_def('training_file_pattern', None))
   flags.DEFINE_string(*arg_def('hparams', ''))
-  flags.DEFINE_integer(*arg_def('train_batch_size', 1))
-  flags.DEFINE_integer(*arg_def('log_step', 1))
+  flags.DEFINE_integer(*arg_def('train_batch_size', 32))
+  flags.DEFINE_integer(*arg_def('log_step', 100))
   flags.DEFINE_integer(*arg_def('num_epochs', 15))
   flags.DEFINE_integer(*arg_def('examples_per_epoch', 120000))
 
@@ -300,7 +300,7 @@ def main(_):
                         logdir=params.model_dir,
                         log_every_n_steps=params.log_step,
                         global_step=global_step,
-                        number_of_steps=1,
+                        number_of_steps=max_steps,
                         init_feed_dict={lr: params.learning_rate},
                         save_interval_secs=1000 * 50,  # 1000 step save once
                         save_summaries_secs=10 * 50    # ten step
