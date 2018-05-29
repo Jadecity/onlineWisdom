@@ -121,10 +121,10 @@ class CoCoDataset():
     dataset = dataset.shuffle(20)
 
     dataset = dataset.map(self._parse_func, num_parallel_calls=64)
-    dataset = dataset.prefetch(batch_size)
     dataset = dataset.apply(
       tf.contrib.data.batch_and_drop_remainder(batch_size))
-    dataset = dataset.prefetch(1)
+    dataset = dataset.prefetch(batch_size)
+    # dataset = dataset.prefetch(1)
 
     return dataset
 
