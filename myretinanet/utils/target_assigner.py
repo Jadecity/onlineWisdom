@@ -125,24 +125,24 @@ class TargetAssigner(object):
       raise ValueError('groundtruth_boxes must be an BoxList')
 
     if groundtruth_labels is None:
-      groundtruth_labels = tf.ones(tf.expand_dims(groundtruth_boxes.num_boxes(),
-                                                  0))
+      groundtruth_labels = tf.ones(tf.expand_dims(groundtruth_boxes.num_boxes(), 0))
       groundtruth_labels = tf.expand_dims(groundtruth_labels, -1)
+
     unmatched_shape_assert = shape_utils.assert_shape_equal(
         shape_utils.combined_static_and_dynamic_shape(groundtruth_labels)[1:],
         shape_utils.combined_static_and_dynamic_shape(
             self._unmatched_cls_target))
+
     labels_and_box_shapes_assert = shape_utils.assert_shape_equal(
-        shape_utils.combined_static_and_dynamic_shape(
-            groundtruth_labels)[:1],
-        shape_utils.combined_static_and_dynamic_shape(
-            groundtruth_boxes.get())[:1])
+        shape_utils.combined_static_and_dynamic_shape(groundtruth_labels)[:1],
+        shape_utils.combined_static_and_dynamic_shape(groundtruth_boxes.get())[:1])
 
     if groundtruth_weights is None:
       num_gt_boxes = groundtruth_boxes.num_boxes_static()
       if not num_gt_boxes:
         num_gt_boxes = groundtruth_boxes.num_boxes()
       groundtruth_weights = tf.ones([num_gt_boxes], dtype=tf.float32)
+
     with tf.control_dependencies(
         [unmatched_shape_assert, labels_and_box_shapes_assert]):
       match_quality_matrix = self._similarity_calc.compare(groundtruth_boxes,

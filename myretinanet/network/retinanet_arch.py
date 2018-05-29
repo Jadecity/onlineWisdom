@@ -523,17 +523,6 @@ def resnet_fpn(features,
                                       num_classes=class_num,
                                       is_training=is_training)
 
-      # Remove unneeded variables from graph.
-      # used_vars =  []
-      # used_vars_name = ['resnet_v2_50/conv1',
-      #                   'resnet_v2_50/pool1',
-      #                   'resnet_v2_50/block1',
-      #                   'resnet_v2_50/block2',
-      #                   'resnet_v2_50/block3',
-      #                   'resnet_v2_50/block4']
-      # for name in used_vars_name:
-      #   used_vars.append(tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope=name))
-
       if ckpt_file and is_training == True:
         """Loads pretrained model through scaffold function."""
         tf.train.init_from_checkpoint(ckpt_file, {
@@ -620,7 +609,7 @@ def retinanet(features,
               min_level=3,
               max_level=7,
               num_classes=90,
-              num_anchors=6,
+              num_anchors=9,
               resnet_depth=50,
               is_training=False):
   """RetinaNet classification and regression model."""

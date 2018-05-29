@@ -85,12 +85,9 @@ Param = namedtuple('ParamStruct', [
   'momentum',
   'learning_rate',
   'weight_decay',
-  'lr_warmup_init',
-  'lr_warmup_step',
-  'lr_drop_step',
   'alpha',
   'gamma',
-  'delta',
+  'pi',
   'box_loss_weight',
   'box_max_detected',
   'box_iou_threshold'
@@ -104,7 +101,7 @@ def inputParam():
   flags.DEFINE_string(*arg_def('retinanet_checkpoint', ''))
   flags.DEFINE_string(*arg_def('training_file_pattern', None))
   flags.DEFINE_string(*arg_def('hparams', ''))
-  flags.DEFINE_integer(*arg_def('train_batch_size', 32))
+  flags.DEFINE_integer(*arg_def('train_batch_size', 16))
   flags.DEFINE_integer(*arg_def('log_step', 100))
   flags.DEFINE_integer(*arg_def('num_epochs', 15))
   flags.DEFINE_integer(*arg_def('examples_per_epoch', 120000))
@@ -183,19 +180,19 @@ def initParam(input_flag):
 
     # optimization
     momentum=0.9,
-    learning_rate=0.08,
+    learning_rate=0.01,
     weight_decay=1e-4,
-    lr_warmup_init=0.1,
-    lr_warmup_step=2000,
-    lr_drop_step=15000,
+    # lr_warmup_init=0.1,
+    # lr_warmup_step=2000,
+    # lr_drop_step=15000,
 
     # classification loss
     alpha=0.25,
-    gamma=1.5,
+    gamma=2,
+    pi=0.01,
 
     # localization loss
-    delta=0.1,
-    box_loss_weight=50.0,
+    box_loss_weight=10.0,
 
     # output detection
     box_max_detected=100,
@@ -269,11 +266,18 @@ def main(_):
                                is_training=is_training,
                                num_anchors=len(params.aspect_ratios) * params.num_scales)
 
+    # Select trainable variables.
+    vars_train = tf.trainable_variables(scope='resnet_v2_50')
+    vars_train += tf.trainable_variables(scope='retinanet')
+    vars_train += tf.trainable_variables(scope='resnet_fpn')
+
+
     # Compute loss
     # cls_loss and box_loss are for logging. only total_loss is optimized.
-    total_loss, cls_loss, box_loss = retinanet_model.detection_loss(logits, pboxes,
-                                                                    glabels, params)
+    total_loss, cls_loss, box_loss = retinanet_model.detection_loss(logits, pboxes, glabels, params)
+    weight_loss = params.weight_decay * tf.add_n([tf.nn.l2_loss(v) for v in vars_train if 'bias' not in v.name])
     tf.losses.add_loss(total_loss)
+    tf.losses.add_loss(weight_loss)
 
     # Get loss
     loss  = tf.losses.get_total_loss()
@@ -281,13 +285,8 @@ def main(_):
     # Create optimizer
     tf.train.create_global_step()
     global_step = tf.train.get_global_step()
-    lr = retinanet_model.learning_rate_schedule(params.learning_rate, params.lr_warmup_init,
-      params.lr_warmup_step, params.lr_drop_step, global_step)
+    lr = retinanet_model.learning_rate_schedule(params.learning_rate, global_step)
     optimizer = tf.train.MomentumOptimizer(lr, params.momentum)
-
-    # Select trainable variables.
-    vars_train = tf.trainable_variables(scope='retinanet')
-    vars_train += tf.trainable_variables(scope='resnet_fpn')
 
     # Create train operation.
     train_op = slim.learning.create_train_op(total_loss=loss,
