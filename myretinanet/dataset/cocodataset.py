@@ -124,7 +124,7 @@ class CoCoDataset():
     dataset = dataset.apply(
       tf.contrib.data.batch_and_drop_remainder(batch_size))
     dataset = dataset.prefetch(batch_size)
-    # dataset = dataset.prefetch(1)
+    dataset = dataset.prefetch(1)
 
     return dataset
 
